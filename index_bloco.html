@@ -1,0 +1,1704 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Mario Bros Clássico (WebGL)</title>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+  <style>
+    body { margin: 0; }
+    canvas { background: #02aaf8; display: block; margin: auto; }
+    #score {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      font-family: sans-serif;
+      font-size: 20px;
+      color: #000;
+      z-index: 101; 
+    }
+    #gameControls {
+      display: none;
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 20px;
+      justify-content: center;
+    }
+
+    #gameControls button {
+      padding: 10px 20px;
+      font-size: 18px;
+      font-family: sans-serif;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+      transition: background-color 0.3s ease;
+    }
+
+    #restartButton {
+     background-color: #f44336;
+    }
+
+    #restartButton:hover {
+     background-color: #d32f2f;
+    }
+
+    #backToMenuButton {
+     background-color: #4CAF50;
+    }
+
+    #backToMenuButton:hover {
+     background-color: #45a049;
+    }
+
+    #continueButton {
+     background-color: #008CBA;
+    }
+
+    #continueButton:hover {
+     background-color: #007B9E;
+    }
+  </style>
+</head>
+<body>
+
+<div id="gameControls" style="display: none; position: absolute; top: 200px; left: 50%; transform: translateX(-50%);">
+  <button id="continueButton">Continuar</button>
+  <button id="restartButton">Reiniciar Jogo</button>
+  <button id="backToMenuButton">Voltar ao Menu</button>
+</div>
+    
+<div id="soundtrack">
+  <audio autoplay hidden id="theme_song">
+    <source src="music/theme_song.mp3" type="audio/mpeg">
+    Your browser does not support the audio element.
+  </audio>
+  <audio id="jump_sound" src="music/jump_sound.mp3" preload="auto"></audio>
+  <audio id="mario_death" src="music/mario_death.mp3" preload="auto"></audio>
+  <audio id="level_finish" src="music/level_finish.mp3" preload="auto"></audio>
+  <audio id="coin" src="music/coin.mp3" preload="auto"></audio>
+</div>
+<div id="score">Score: 0</div>
+<canvas id="canvas" width="800" height="700"></canvas>
+<script>
+// Obtenção dos elementos do DOM
+const canvas = document.getElementById("canvas");
+const gl = canvas.getContext("webgl");
+const scoreDiv = document.getElementById("score");
+const gameControlsDiv = document.getElementById("gameControls");
+const restartButton = document.getElementById("restartButton");
+const backToMenuButton = document.getElementById("backToMenuButton");
+const continueButton = document.getElementById("continueButton"); 
+function positionGameControls() {
+    const canvasRect = canvas.getBoundingClientRect();
+    const desiredTop = canvas.offsetTop + canvas.height - 120;
+    gameControlsDiv.style.position = 'absolute';
+    gameControlsDiv.style.left = '50%';
+    gameControlsDiv.style.top = `${desiredTop}px`;
+    gameControlsDiv.style.transform = 'translateX(-50%)';
+}
+// VARIÁVEIS DE ESTADO DO JOGO
+const GAME_STATE = {
+    WELCOME_SCREEN: 'WELCOME_SCREEN',
+    MAIN_MENU: 'MAIN_MENU',
+    PLAYING: 'PLAYING',
+    PAUSED: 'PAUSED',
+    GAME_OVER: 'GAME_OVER',
+    GAME_WON: 'GAME_WON'
+};
+let gameState = GAME_STATE.WELCOME_SCREEN;
+
+let hoveredMenuItem = null;
+
+let gameAnimationFrameId = null;
+
+//Para música tema da abertura e outros sons
+const theme_song = document.getElementById("theme_song");
+const jump_sound = document.getElementById("jump_sound");
+const mario_death = document.getElementById("mario_death");
+const level_finish = document.getElementById("level_finish");
+const coin = document.getElementById("coin");
+
+if (!gl) {
+  alert("WebGL não está disponível. Por favor, tente com um navegador compatível.");
+  console.error("Erro: WebGL não disponível.");
+  throw new Error("WebGL não disponível.");
+}
+
+// Variáveis Globais WebGL para Objetos do Jogo (Pixels)
+let shaderProgram; // Shader para os objetos do jogo (pixels coloridos)
+let coordLocation;
+let colorAttribLocation;
+let translationLocation;
+
+// VARIÁVEIS GLSL PARA TEXTURAS E INTERFACE MENU
+let textureShaderProgram; // Shader para renderizar (textos, retângulos sólidos)
+let texCoordLocation;
+let useTextureLocation;
+let uSamplerLocation;
+let aColorLocation; // Atributo de cor para desenho de primitivas sólidas
+let uProjectionMatrixLocation;
+let uTranslationLocationTex; // Uniform para translação no shader de textura
+let uScaleLocationTex;       // Uniform para escala no shader de textura
+
+// Buffers para desenhar um único quadrado/retângulo (para fundo e texto)
+let quadPositionBuffer; // Vértices para um quadrado unitário
+let quadTexCoordBuffer; // Coordenadas de textura para o quadrado unitário
+
+// Estruturas para armazenar informações de texto como texturas
+const textTextures = {};
+
+class GameObjectData {
+    constructor() {
+        this.rawVertices = [];
+        this.colors = [];
+        this.spriteWidth = 0;
+        this.spriteHeight = 0;
+        this.buffers = {};
+        this.calculatedVertices = [];
+    }
+}
+
+let marioData = new GameObjectData();
+let cenarioSuperiorData = new GameObjectData();
+let cenarioInferiorData = new GameObjectData();
+let goombaData = new GameObjectData();
+let koopaData = new GameObjectData();
+let moedaData = new GameObjectData();
+let nuvemData = new GameObjectData();
+let blocoData = new GameObjectData();
+let chegadaData = new GameObjectData();
+let casteloData = new GameObjectData();
+let canoData = new GameObjectData();
+let escadaData = new GameObjectData();
+
+// Variáveis do Jogo
+let marioX = -0.5;
+let marioY;
+let marioVelocityX = 0;
+let marioVelocityY = 0;
+const gravity = -0.005;
+let jumping = false;
+let score = 0;
+
+let cameraX = 0;
+
+const MARIO_WALK_SPEED = 0.009;
+
+const PARALLAX_FACTOR_GROUND = 1.0;
+const PARALLAX_FACTOR_SCENERY_SUPERIOR = 0.5;
+const PARALLAX_FACTOR_CLOUD = 0.2;
+
+const keysPressed = {
+    ArrowLeft: false,
+    ArrowRight: false,
+    Space: false
+};
+let lastKeyPressTime = 0;
+const keyPressDelay = 200;
+
+let goombas = [];
+let koopas = [];
+let moedas = [];
+let nuvens = [
+    { x: 0.0, y: 0.5, width: 0, height: 0 },
+    { x: 0.8, y: 0.6, width: 0, height: 0 }
+];
+let blocos = [];
+let canos = [];
+let stopEnemySpawn = false;
+const ESCADA_WORLD_X = 5.8;
+const CASTLE_WORLD_X = 7;
+
+const objectBaseSizes = {
+    mario: { width: 0.09, height: 0.15 },
+    cenarioSuperior: { width: 0.4, height: 0.15},
+    cenarioInferior: { width: 2, height: 0.6 },
+    goomba: { width: 0.06, height: 0.1 },
+    koopa: { width: 0.12, height: 0.22 },
+    moeda: { width: 0.06, height: 0.06 },
+    nuvem: { width: 0.3, height: 0.15 },
+    bloco: { width: 0.1, height: 0.1 },
+    chegada: { width: 0.2, height: 1},
+    castelo: { width: 0.7, height: 0.9 },
+    cano: { width: 0.15, height: 0.25 },
+    escada: { width: 0.70, height: 1.0 }
+};
+
+const cenarioSuperiorDisplayY = -0.2;
+const cenarioInferiorDisplayY = -0.95;
+
+function createShader(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    console.error(`Erro ao compilar ${type === gl.VERTEX_SHADER ? 'Vertex' : 'Fragment'} Shader:`, gl.getInfoLog(shader));
+    gl.deleteShader(shader);
+    return null;
+  }
+  return shader;
+}
+
+// Função para iniciar os shaders
+function initShaders() {
+  const vertexShaderSource = `
+    attribute vec2 coordinates;
+    attribute vec4 color;
+    uniform vec2 translation;
+    varying vec4 vColor;
+    void main(void) {
+      gl_Position = vec4(coordinates + translation, 0.0, 1.0);
+      gl_PointSize = 5.2;
+      vColor = color;
+    }
+  `;
+
+  const fragmentShaderSource = `
+    precision mediump float;
+    varying vec4 vColor;
+    void main(void) {
+      gl_FragColor = vColor;
+    }
+  `;
+
+  const vertexShader = createShader(gl.VERTEX_SHADER, vertexShaderSource);
+  const fragmentShader = createShader(gl.FRAGMENT_SHADER, fragmentShaderSource);
+
+  shaderProgram = gl.createProgram();
+  gl.attachShader(shaderProgram, vertexShader);
+  gl.attachShader(shaderProgram, fragmentShader);
+  gl.linkProgram(shaderProgram);
+
+  if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+    console.error("Erro ao linkar programa:", gl.getProgramInfoLog(shaderProgram));
+    throw new Error("Erro ao linkar programa WebGL.");
+  }
+
+  coordLocation = gl.getAttribLocation(shaderProgram, "coordinates");
+  colorAttribLocation = gl.getAttribLocation(shaderProgram, "color");
+  translationLocation = gl.getUniformLocation(shaderProgram, "translation");
+}
+
+// Função para criar textura a partir de texto
+function createTextTexture(text, font, color) {
+    const tempCanvas = document.createElement('canvas');
+    const tempCtx = tempCanvas.getContext('2d');
+
+    tempCtx.font = font;
+    const metrics = tempCtx.measureText(text);
+
+    const ascent = metrics.actualBoundingBoxAscent || 0;
+    const descent = metrics.actualBoundingBoxDescent || 0;
+    const padding = 8; 
+
+    tempCanvas.width = metrics.width + 2 * padding;
+    tempCanvas.height = ascent + descent + 2 * padding;
+
+    tempCtx.font = font; // Redefinir a fonte após mudar o tamanho do canvas
+    tempCtx.fillStyle = color;
+    tempCtx.textAlign = 'left';
+    tempCtx.textBaseline = 'alphabetic'; // Alterado para alphabetic para melhor controle com ascent/descent
+
+    // Desenha o texto, considerando o ascent para posicioná-lo corretamente com textBaseline='alphabetic'
+    tempCtx.fillText(text, padding, padding + ascent); // Ajusta Y para o topo do ascent
+
+    const texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, tempCanvas);
+
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+    gl.generateMipmap(gl.TEXTURE_2D);
+
+    return { texture: texture, width: tempCanvas.width, height: tempCanvas.height };
+}
+
+// Pré-carregar todas as texturas de texto para os menus
+function preloadTextTextures() {
+    textTextures['title'] = createTextTexture('MARIO BROS', 'bold 70px "Press Start 2P"', '#FFF');
+    textTextures['pressAnyKey'] = createTextTexture('Press any key to start', '20px "Press Start 2P"', '#FFF');
+    textTextures['menuTitle'] = createTextTexture('MENU', 'bold 50px "Press Start 2P"', '#FFF');
+    textTextures['start'] = createTextTexture('START', '40px "Press Start 2P"', '#FFF');
+    textTextures['settings'] = createTextTexture('CONFIGURAÇÕES', '40px "Press Start 2P"', '#FFF');
+    textTextures['startHover'] = createTextTexture('> START <', '40px "Press Start 2P"', '#FFD700'); // Amarelo para hover
+    textTextures['settingsHover'] = createTextTexture('> CONFIGURAÇÕES <', '40px "Press Start 2P"', '#FFD700'); // Amarelo para hover
+    textTextures['derrota'] = createTextTexture('DERROTA', 'bold 70px "Press Start 2P"', '#FF0000');
+    textTextures['vitoria'] = createTextTexture('VITORIA', 'bold 70px "Press Start 2P"', '#00FF00');
+    textTextures['finalScore'] = createTextTexture('SCORE FINAL: 0', '30px "Press Start 2P"', '#FFF');
+    textTextures['paused'] = createTextTexture('PAUSE', 'bold 70px "Press Start 2P"', '#FFFF00');
+}
+
+// Inicialização dos Shaders (Texturas e Retângulos)
+function initTextShaders() {
+    const vertexShaderSource = `
+        attribute vec2 aVertexPosition;
+        attribute vec2 aTextureCoord;
+        attribute vec4 aColor; // Adicionado para cores de primitivas (background, etc.)
+        
+        uniform mat3 uProjectionMatrix;
+        uniform vec2 uTranslation; // Posição do centro do objeto
+        uniform vec2 uScale;       // Escala do objeto
+        uniform bool uUseTexture;  // Flag para decidir se usa textura ou cor
+
+        varying vec2 vTextureCoord;
+        varying vec4 vColor; // Passa a cor para o fragment shader
+
+        void main(void) {
+            vec2 finalTextureCoord = aTextureCoord;
+            if (uUseTexture) {
+                // INVERSÃO DA COORDENADA Y DA TEXTURA PARA CORRIGIR TEXTO DE CABEÇA PARA BAIXO
+                finalTextureCoord.y = 1.0 - aTextureCoord.y;
+            }
+
+            // Aplica escala e translação primeiro
+            vec3 position = vec3(aVertexPosition * uScale + uTranslation, 1.0);
+            // Transforma para coordenadas de clip space usando a matriz de projeção 2D
+            gl_Position = vec4((uProjectionMatrix * position).xy, 0.0, 1.0);
+            vTextureCoord = finalTextureCoord; // Use a coordenada de textura ajustada
+            vColor = aColor; // Copia a cor do atributo para o varying
+        }
+    `;
+
+    const fragmentShaderSource = `
+        precision mediump float;
+
+        uniform sampler2D uSampler;
+        uniform bool uUseTexture;
+
+        varying vec2 vTextureCoord;
+        varying vec4 vColor; // Recebe a cor do vertex shader
+
+        void main(void) {
+            if (uUseTexture) {
+                gl_FragColor = texture2D(uSampler, vTextureCoord);
+            } else {
+                gl_FragColor = vColor;
+            }
+        }
+    `;
+
+    const vertexShader = createShader(gl.VERTEX_SHADER, vertexShaderSource);
+    const fragmentShader = createShader(gl.FRAGMENT_SHADER, fragmentShaderSource);
+
+    textureShaderProgram = gl.createProgram();
+    gl.attachShader(textureShaderProgram, vertexShader);
+    gl.attachShader(textureShaderProgram, fragmentShader);
+    gl.linkProgram(textureShaderProgram);
+
+    if (!gl.getProgramParameter(textureShaderProgram, gl.LINK_STATUS)) {
+        console.error("Erro ao linkar programa de textura/UI:", gl.getProgramInfoLog(textureShaderProgram));
+        throw new Error("Erro ao linkar programa de textura/UI WebGL.");
+    }
+
+    // Obtém os locais dos atributos e uniforms para o shader de textura
+    texCoordLocation = gl.getAttribLocation(textureShaderProgram, "aTextureCoord");
+    useTextureLocation = gl.getUniformLocation(textureShaderProgram, "uUseTexture");
+    uSamplerLocation = gl.getUniformLocation(textureShaderProgram, "uSampler");
+    aColorLocation = gl.getAttribLocation(textureShaderProgram, "aColor"); // Cor para primitivas sólidas
+    uProjectionMatrixLocation = gl.getUniformLocation(textureShaderProgram, "uProjectionMatrix");
+    uTranslationLocationTex = gl.getUniformLocation(textureShaderProgram, "uTranslation");
+    uScaleLocationTex = gl.getUniformLocation(textureShaderProgram, "uScale");
+
+    // Setup de um buffer de posição e coordenada de textura para um quadrado genérico (usado para desenhar texturas e retângulos)
+    // Este quadrado representa um quadrado unitário de -0.5 a 0.5 em X e Y
+    const positions = [
+        -0.5,  0.5, // Top-left
+         0.5,  0.5, // Top-right
+        -0.5, -0.5, // Bottom-left
+         0.5, -0.5  // Bottom-right
+    ];
+    quadPositionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadPositionBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+
+    const textureCoords = [
+        0.0, 0.0, 
+        1.0, 0.0, 
+        0.0, 1.0, 
+        1.0, 1.0  
+    ];
+    quadTexCoordBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadTexCoordBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(textureCoords), gl.STATIC_DRAW);
+
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+}
+
+function createProjectionMatrix(width, height) {
+    return new Float32Array([
+        2 / width, 0, 0,
+        0, -2 / height, 0,
+        -1, 1, 1
+    ]);
+}
+
+// Função para desenhar retângulos no WebGL
+// x, y são as coordenadas do centro do retângulo em PIXELS. width, height são em PIXELS.
+function drawQuad(x, y, width, height, color = null, textureInfo = null) {
+    gl.useProgram(textureShaderProgram);
+
+    // Configura a matriz de projeção para mapear pixels para clip space
+    const projectionMatrix = createProjectionMatrix(canvas.width, canvas.height);
+    gl.uniformMatrix3fv(uProjectionMatrixLocation, false, projectionMatrix);
+    gl.uniform2fv(uTranslationLocationTex, [x, y]); // X e Y em coordenadas de tela (pixels)
+    gl.uniform2fv(uScaleLocationTex, [width, height]); // Largura e altura em pixels
+
+    // Ativa o buffer de posições e configura o atributo aVertexPosition
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadPositionBuffer);
+    gl.vertexAttribPointer(gl.getAttribLocation(textureShaderProgram, "aVertexPosition"), 2, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(gl.getAttribLocation(textureShaderProgram, "aVertexPosition"));
+
+    if (textureInfo) {
+        gl.uniform1i(useTextureLocation, true); // Diz ao shader para usar textura
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, textureInfo.texture);
+        gl.uniform1i(uSamplerLocation, 0);
+
+        // Ativa o buffer de coordenadas de textura e configura o atributo aTextureCoord
+        gl.bindBuffer(gl.ARRAY_BUFFER, quadTexCoordBuffer);
+        gl.vertexAttribPointer(texCoordLocation, 2, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(texCoordLocation);
+        gl.disableVertexAttribArray(aColorLocation); // Desabilita o atributo de cor se for usar textura
+    } else if (color) {
+        gl.uniform1i(useTextureLocation, false); // Diz ao shader para usar cor
+        // Desabilita as coordenadas de textura se não for usar textura
+        gl.disableVertexAttribArray(texCoordLocation);
+        gl.bindTexture(gl.TEXTURE_2D, null); // Desbind qualquer textura ativa
+
+        // Define a cor diretamente no atributo de cor (como um valor constante)
+        gl.vertexAttrib4fv(aColorLocation, color);
+        gl.enableVertexAttribArray(aColorLocation);
+    }
+
+    // Desenha dois triângulos para formar um quadrado (que será dimensionado e posicionado)
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+
+
+function normalizePixel(x, y, spriteWidth, spriteHeight) {
+    const normalizedX = (x / (spriteWidth - 1)) - 0.5;
+    const normalizedY = ((spriteHeight - 1 - y) / (spriteHeight - 1)) - 0.5;
+    return [normalizedX, normalizedY];
+}
+
+function parseColor(rgba) {
+  const match = rgba.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),?\s*([\d.]*)?\)/);
+  if (match) {
+    const r = parseInt(match[1]) / 255;
+    const g = parseInt(match[2]) / 255;
+    const b = parseInt(match[3]) / 255;
+    const a = match[4] ? parseFloat(match[4]) : 1.0;
+    return [r, g, b, a];
+  }
+  return [0, 0, 0, 1];
+}
+
+function loadPixelsJSON(url, dataStore) {
+  return fetch(url)
+    .then(response => {
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status} ao carregar ${url}`);
+      }
+      return response.json();
+    })
+    .then(data => {
+      const minX = Math.min(...data.map(p => p.x));
+      const maxX = Math.max(...data.map(p => p.x));
+      const minY = Math.min(...data.map(p => p.y));
+      const maxY = Math.max(...data.map(p => p.y));
+
+      dataStore.spriteWidth = maxX - minX + 1;
+      dataStore.spriteHeight = maxY - minY + 1;
+      dataStore.rawVertices = [];
+      dataStore.colors = [];
+
+      for (const p of data) {
+        const adjustedX = p.x - minX;
+        const adjustedY = p.y - minY;
+
+        const [nx, ny] = normalizePixel(adjustedX, adjustedY, dataStore.spriteWidth, dataStore.spriteHeight);
+
+        dataStore.rawVertices.push(nx, ny);
+        dataStore.colors.push(...parseColor(p.color));
+      }
+      console.log(`Dados de ${url} carregados e processados. Sprite Dimensões (pixels): ${dataStore.spriteWidth}x${dataStore.spriteHeight}`);
+      return true;
+    })
+    .catch(err => {
+      console.error(`Erro ao carregar ${url}:`, err);
+      return false;
+    });
+}
+
+function processObjectVertices(dataStore, targetWidth, targetHeight) {
+    const canvasAspectRatio = canvas.width / canvas.height;
+    dataStore.calculatedVertices = [];
+
+    let scaleX = targetWidth;
+    let scaleY = targetHeight;
+
+    const spritePixelAspectRatio = dataStore.spriteWidth / dataStore.spriteHeight;
+    const targetAspectRatio = targetWidth / targetHeight;
+
+    if (spritePixelAspectRatio > targetAspectRatio) {
+        scaleY = targetWidth / spritePixelAspectRatio;
+    } else {
+        scaleX = targetHeight * spritePixelAspectRatio;
+    }
+
+    if (canvasAspectRatio > 1) {
+        scaleY /= canvasAspectRatio;
+    } else if (canvasAspectRatio < 1) {
+        scaleX *= canvasAspectRatio;
+    }
+
+    for (let i = 0; i < dataStore.rawVertices.length; i += 2) {
+        const x = dataStore.rawVertices[i];
+        const y = dataStore.rawVertices[i + 1];
+
+        dataStore.calculatedVertices.push(x * scaleX, y * scaleY);
+    }
+}
+
+function setupObjectBuffers(dataStore) {
+  if (!dataStore.calculatedVertices || dataStore.calculatedVertices.length === 0) {
+      console.warn("Tentativa de configurar buffers com dados vazios ou nulos para", dataStore);
+      return;
+  }
+
+  const positionBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, positionBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(dataStore.calculatedVertices), gl.STATIC_DRAW);
+
+  const colorBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, colorBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(dataStore.colors), gl.STATIC_DRAW);
+
+  dataStore.buffers = {
+      position: positionBuf,
+      color: colorBuf,
+      numVertices: dataStore.calculatedVertices.length / 2
+  };
+}
+
+function drawPixelObject(dataStore, dx, dy) {
+  if (!dataStore || !dataStore.buffers.position || !dataStore.buffers.color) {
+    return;
+  }
+
+  gl.bindBuffer(gl.ARRAY_BUFFER, dataStore.buffers.position);
+  gl.vertexAttribPointer(coordLocation, 2, gl.FLOAT, false, 0, 0);
+  gl.enableVertexAttribArray(coordLocation);
+
+  gl.bindBuffer(gl.ARRAY_BUFFER, dataStore.buffers.color);
+  gl.vertexAttribPointer(colorAttribLocation, 4, gl.FLOAT, false, 0, 0);
+  gl.enableVertexAttribArray(colorAttribLocation);
+
+  gl.uniform2fv(translationLocation, [dx, dy]);
+  gl.drawArrays(gl.POINTS, 0, dataStore.buffers.numVertices);
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.repeat) return;
+
+  if (e.code === "Escape") {
+      if (gameState === GAME_STATE.PLAYING) {
+          pauseGame();
+      } else if (gameState === GAME_STATE.PAUSED) {
+          continueGame();
+          theme_song.play().catch(e => console.log("Erro ao retomar música tema:", e)); // Retoma a música
+      }
+      return; 
+  }
+
+  switch (gameState) {
+    case GAME_STATE.WELCOME_SCREEN:
+        // Qualquer tecla leva ao menu 
+        gameState = GAME_STATE.MAIN_MENU;
+        break;
+    case GAME_STATE.PLAYING:
+        if (e.code === "Space" && !jumping) {
+            marioVelocityY = 0.09;
+            jumping = true;
+            keysPressed.Space = true;
+
+            //som para pulo
+           jump_sound.currentTime = 0;
+           jump_sound.play().catch(e => console.warn("som de pulo bloqueado:",e));
+        }
+        if (e.code === "ArrowLeft") {
+            keysPressed.ArrowLeft = true;
+        }
+        if (e.code === "ArrowRight") {
+            keysPressed.ArrowRight = true;
+        }
+        break;
+    case GAME_STATE.PAUSED:
+        if (e.code === "Space" && !jumping) {
+            marioVelocityY = 0;
+            jumping = false;
+            keysPressed.Space = false;
+
+        }
+        if (e.code === "ArrowLeft") {
+            keysPressed.ArrowLeft = false;
+        }
+        if (e.code === "ArrowRight") {
+            keysPressed.ArrowRight = false;
+        }
+        break;
+    case GAME_STATE.GAME_OVER:
+        break;
+    case GAME_STATE.GAME_WON:
+        break;
+    case GAME_STATE.MAIN_MENU:
+        break;
+  }
+  
+});
+
+document.addEventListener("keyup", (e) => {
+    if (gameState === GAME_STATE.PLAYING) {
+        if (e.code === "ArrowLeft") {
+            keysPressed.ArrowLeft = false;
+        }
+        if (e.code === "ArrowRight") {
+            keysPressed.ArrowRight = false;
+        }
+        if (e.code === "Space") {
+            keysPressed.Space = false;
+        }
+    }
+});
+
+let lastEnemySpawnTime = 0;
+const enemySpawnIntervalMin = 800;
+const enemySpawnIntervalMax = 1200;
+const objectWorldSpeed = 0.003;
+
+const getEffectiveDimensions = (dataStore, targetWidth, targetHeight) => {
+    const canvasAspectRatio = canvas.width / canvas.height;
+    let scaleX = targetWidth;
+    let scaleY = targetHeight;
+    const spritePixelAspectRatio = dataStore.spriteWidth / dataStore.spriteHeight;
+    const targetAspectRatio = targetWidth / targetHeight;
+
+    if (spritePixelAspectRatio > targetAspectRatio) {
+        scaleY = targetWidth / spritePixelAspectRatio;
+    } else {
+        scaleX = targetHeight * spritePixelAspectRatio;
+    }
+
+    if (canvasAspectRatio > 1) {
+        scaleY /= canvasAspectRatio;
+    } else if (canvasAspectRatio < 1) {
+        scaleX *= canvasAspectRatio;
+    }
+    return { width: scaleX, height: scaleY };
+};
+let entitiesSpawned = {
+    goomba: 0,
+    koopa: 0,
+    moeda: 0,
+    bloco: 0,
+    cano: 0
+};
+
+const minSpawnsPerType = {
+    goomba: 3,
+    koopa: 2,
+    moeda: 2,
+    bloco: 2,
+    cano: 1
+};
+
+function resetSpawnCounters() {
+    for (const type in entitiesSpawned) {
+        entitiesSpawned[type] = 0;
+    }
+}
+
+function spawnEntity() {
+    if (stopEnemySpawn) return;
+    const spawnWorldX = 1.1 - cameraX;
+    let entity;
+    
+    const goombaDimensions = getEffectiveDimensions(goombaData, objectBaseSizes.goomba.width, objectBaseSizes.goomba.height);
+    const koopaDimensions = getEffectiveDimensions(koopaData, objectBaseSizes.koopa.width, objectBaseSizes.koopa.height);
+    const moedaDimensions = getEffectiveDimensions(moedaData, objectBaseSizes.moeda.width, objectBaseSizes.moeda.height);
+    const blocoDimensions = getEffectiveDimensions(blocoData, objectBaseSizes.bloco.width, objectBaseSizes.bloco.height);
+    const canoDimensions = getEffectiveDimensions(canoData, objectBaseSizes.cano.width, objectBaseSizes.cano.height);
+
+    const groundLevelY = cenarioInferiorDisplayY + cenarioInferiorDimensions.height / 2;
+    const targetBlockY = cenarioSuperiorDisplayY + blocoDimensions.height / 2;
+    const minMoedaYOffset = 0.05;
+
+    let typeToSpawn = null;
+    const typesNeedingSpawn = [];
+
+    for (const type in minSpawnsPerType) {
+        if (entitiesSpawned[type] < minSpawnsPerType[type]) {
+            typesNeedingSpawn.push(type);
+        }
+    }
+
+    if (typesNeedingSpawn.length > 0) {
+       
+      typeToSpawn = typesNeedingSpawn[Math.floor(Math.random() * typesNeedingSpawn.length)];
+    } else {
+
+         const typeRoll = Math.random();
+
+        if (typeRoll < 0.40) { 
+            typeToSpawn = 'goomba';
+        } else if (typeRoll < 0.70) { 
+            typeToSpawn = 'koopa';
+        } else if (typeRoll < 0.90) { 
+            typeToSpawn = 'moeda';
+        } else if (typeRoll < 0.96) { 
+            typeToSpawn = 'bloco';
+        } else { 
+            typeToSpawn = 'cano';
+        }
+    }
+
+    switch (typeToSpawn) {
+        case 'goomba':
+            entity = {
+                type: 'goomba',
+                x: spawnWorldX,
+                y: groundLevelY + goombaDimensions.height / 2,
+                speed: objectWorldSpeed * (0.8 + Math.random() * 0.4),
+                width: goombaDimensions.width,
+                height: goombaDimensions.height
+            };
+            goombas.push(entity);
+            entitiesSpawned.goomba++;
+            break;
+        case 'koopa':
+            entity = {
+                type: 'koopa',
+                x: spawnWorldX,
+                y: groundLevelY + koopaDimensions.height / 2,
+                speed: objectWorldSpeed * (0.8 + Math.random() * 0.3),
+                width: koopaDimensions.width,
+                height: koopaDimensions.height
+            };
+            koopas.push(entity);
+            entitiesSpawned.koopa++;
+            break;
+        case 'moeda':
+            entity = {
+                type: 'moeda',
+                x: spawnWorldX,
+                y: groundLevelY + moedaDimensions.height / 2 + minMoedaYOffset + (Math.random() * 0.2),
+                speed: objectWorldSpeed * (1.0 + Math.random() * 0.2),
+                collected: false,
+                width: moedaDimensions.width,
+                height: moedaDimensions.height
+            };
+            moedas.push(entity);
+            entitiesSpawned.moeda++;
+            break;
+        case 'bloco':
+            entity = {
+                type: 'bloco',
+                x: spawnWorldX,
+                y: targetBlockY,
+                width: blocoDimensions.width,
+                height: blocoDimensions.height
+            };
+            blocos.push(entity);
+            entitiesSpawned.bloco++;
+            const  verticalOffset = 0.04;
+            const moedaOnBlockY = entity.y - (blocoDimensions.height / 2) - (moedaDimensions.height / 2) - verticalOffset;
+            const moedaOnBlock = {
+                    type: 'moeda',
+                    x: entity.x, 
+                    y: moedaOnBlockY,
+                    speed: 0, 
+                    collected: false,
+                    width: moedaDimensions.width,
+                    height: moedaDimensions.height
+                };
+                moedas.push(moedaOnBlock);
+            break;
+        case 'cano':
+            entity = {
+                type: 'cano',
+                x: spawnWorldX,
+                y: groundLevelY + canoDimensions.height / 2,
+                width: canoDimensions.width,
+                height: canoDimensions.height
+            };
+            canos.push(entity);
+            entitiesSpawned.cano++;
+            break;
+        default:
+            console.warn("Tipo de entidade desconhecido para spawn:", typeToSpawn);
+            break;
+    }
+
+}
+
+function checkCollision(obj1X, obj1Y, obj1Width, obj1Height, obj2X, obj2Y, obj2Width, obj2Height, obj1PrevY, obj1PrevX) {
+    const obj1Left = obj1X - obj1Width / 2;
+    const obj1Right = obj1X + obj1Width / 2;
+    const obj1Bottom = obj1Y - obj1Height / 2;
+    const obj1Top = obj1Y + obj1Height / 2;
+
+    const obj2Left = obj2X - obj2Width / 2;
+    const obj2Right = obj2X + obj2Width / 2;
+    const obj2Bottom = obj2Y - obj2Height / 2;
+    const obj2Top = obj2Y + obj2Height / 2;
+
+    const colliding = obj1Left < obj2Right &&
+                     obj1Right > obj2Left &&
+                     obj1Bottom < obj2Top &&
+                     obj1Top > obj2Bottom;
+
+    if (!colliding) {
+        return { collided: false, direction: 'none' };
+    }
+
+    let collisionDirection = 'none';
+    
+    if (obj1PrevY - obj1Height / 2 >= obj2Top && obj1Y - obj1Height / 2 < obj2Top && marioVelocityY <= 0) {
+        collisionDirection = 'top'; // Colisão do topo do obj1 com o fundo do obj2 (obj1 caindo em obj2)
+    }
+    // Se o obj1 estava abaixo do obj2 e agora está colidindo por cima dele (pulando)
+    else if (obj1PrevY + obj1Height / 2 <= obj2Bottom && obj1Y + obj1Height / 2 > obj2Bottom && marioVelocityY >= 0) {
+        collisionDirection = 'bottom'; // Colisão da base do obj1 com o topo do obj2 (obj1 pulando e batendo em obj2)
+    }
+    else if (obj1PrevX + obj1Width / 2 <= obj2Left && obj1X + obj1Width / 2 > obj2Left) {
+        collisionDirection = 'right'; // obj1 vindo da esquerda e batendo na direita do obj2
+    } else if (obj1PrevX - obj1Width / 2 >= obj2Right && obj1X - obj1Width / 2 < obj2Right) {
+        collisionDirection = 'left'; // obj1 vindo da direita e batendo na esquerda do obj2
+    }
+
+    return { collided: colliding, direction: collisionDirection };
+}
+
+
+let lastFrameTime = 0;
+let cenarioInferiorDimensions;
+let marioPrevX;
+let marioPrevY;
+
+function resetGame() {
+
+    gameFinishing = false;
+
+    gameControlsDiv.style.display = 'none';
+    restartButton.style.display = 'none';
+    backToMenuButton.style.display = 'none';
+    continueButton.style.display = 'none';
+
+    restartButton.disabled = true;
+    backToMenuButton.disabled = true;
+    continueButton.disabled = true;
+    if (gameAnimationFrameId) {
+        cancelAnimationFrame(gameAnimationFrameId);
+        gameAnimationFrameId = null;
+    }
+
+    marioX = -0.5;
+    marioY = 0;
+    marioVelocityX = 0;
+    marioVelocityY = 0;
+    jumping = false;
+    score = 0;
+    cameraX = 0;
+    keysPressed.ArrowLeft = false;
+    keysPressed.ArrowRight = false;
+    keysPressed.Space = false;
+    goombas = [];
+    koopas = [];
+    moedas = [];
+    blocos = [];
+    canos = [];
+    stopEnemySpawn = false;
+    lastEnemySpawnTime = 0;
+
+    scoreDiv.textContent = `Score: ${score}`;
+    restartButton.style.display = 'none';
+
+// Re-inicializa a posição Y do Mario baseada no chão
+    const marioDimensions = getEffectiveDimensions(marioData, objectBaseSizes.mario.width, objectBaseSizes.mario.height);
+    cenarioInferiorDimensions = getEffectiveDimensions(cenarioInferiorData, objectBaseSizes.cenarioInferior.width, objectBaseSizes.cenarioInferior.height);
+    marioY = (cenarioInferiorDisplayY + cenarioInferiorDimensions.height / 2) + (marioDimensions.height / 2) + 0.001;
+
+    console.log("Reset Game: Mario Y =", marioY);
+    console.log("Reset Game: Cenario Inferior Y =", cenarioInferiorDisplayY);
+    console.log("Reset Game: Mario Height =", marioDimensions.height);
+    console.log("Reset Game: Cenario Inferior Height =", cenarioInferiorDimensions.height);
+    console.log("Reset Game: Lower bound for ground collision =", cenarioInferiorDisplayY - cenarioInferiorDimensions.height / 2 - 0.1);
+
+    gameState = GAME_STATE.PLAYING;
+    // Garante que o game loop é reiniciado
+    gameAnimationFrameId = requestAnimationFrame(animate);
+}
+
+restartButton.addEventListener('click', resetGame);
+
+backToMenuButton.addEventListener('click', () => {
+    gameControlsDiv.style.display = 'none';
+    gameState = GAME_STATE.MAIN_MENU;
+    if (gameAnimationFrameId) {
+        cancelAnimationFrame(gameAnimationFrameId);
+        gameAnimationFrameId = null;
+    }
+    gameAnimationFrameId = requestAnimationFrame(animate);
+});
+continueButton.addEventListener('click', continueGame);
+
+// FUNÇÕES PARA DESENHAR AS TELAS DO MENU
+
+function drawWelcomeScreen() {
+    // Limpa a tela com a cor de fundo
+    gl.clearColor(0.09, 0.67, 0.97, 1.0); // Cor do céu #02aaf8 em RGBA
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    // Desenha o fundo azul sólido (tela cheia)
+    drawQuad(canvas.width / 2, canvas.height / 2, canvas.width, canvas.height, [0.09, 0.67, 0.97, 1.0]);
+
+    // Desenha o título "MARIO BROS"
+    const titleTex = textTextures['title'];
+    if (titleTex) {
+        // x, y, width, height em pixels. O drawQuad centraliza o sprite.
+        drawQuad(canvas.width / 2, canvas.height / 2 - 50, titleTex.width, titleTex.height, null, titleTex);
+    }
+
+    // Desenha "Press any key to start"
+    const pressAnyKeyTex = textTextures['pressAnyKey'];
+    if (pressAnyKeyTex) {
+        drawQuad(canvas.width / 2, canvas.height / 2 + 30, pressAnyKeyTex.width, pressAnyKeyTex.height, null, pressAnyKeyTex);
+    }
+    scoreDiv.style.display = 'none'; // Esconde o score no menu
+}
+
+// Armazena as dimensões das caixas de texto do menu para detecção de mouse
+const menuOptionBounds = [];
+
+function drawMainMenu() {
+    // Limpa a tela com a cor de fundo (WebGL)
+    gl.clearColor(0.09, 0.67, 0.97, 1.0); // Cor do céu #02aaf8 em RGBA
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    // Desenha o fundo azul sólido (tela cheia)
+    drawQuad(canvas.width / 2, canvas.height / 2, canvas.width, canvas.height, [0.09, 0.67, 0.97, 1.0]);
+
+    // Desenha o título "MENU"
+    const menuTitleTex = textTextures['menuTitle'];
+    if (menuTitleTex) {
+        drawQuad(canvas.width / 2, canvas.height / 2 - 100, menuTitleTex.width, menuTitleTex.height, null, menuTitleTex);
+    }
+
+    const menuOptionsData = [
+        { key: 'start', text: 'START', hoverKey: 'startHover', index: 0 },
+        { key: 'settings', text: 'CONFIGURAÇÕES', hoverKey: 'settingsHover', index: 1 }
+    ];
+    const startY = canvas.height / 2;
+    const lineHeight = 50;
+
+    menuOptionBounds.length = 0; // Limpa as bounds anteriores
+
+    menuOptionsData.forEach((optionData, index) => {
+        let yPos = startY + index * lineHeight;
+        // Escolhe a textura correta (normal ou hover)
+        const currentTextTex = hoveredMenuItem === optionData.index ? textTextures[optionData.hoverKey] : textTextures[optionData.key];
+
+        if (currentTextTex) {
+            const textWidth = currentTextTex.width;
+            const textHeight = currentTextTex.height;
+
+            // Desenha a textura do texto no WebGL
+            drawQuad(canvas.width / 2, yPos, textWidth, textHeight, null, currentTextTex);
+
+            // Armazena as bounds para detecção de mouse (em coordenadas de tela)
+            // Lembre-se que drawQuad centraliza o sprite, então o left/top precisam ser calculados a partir do centro.
+            const left = canvas.width / 2 - textWidth / 2;
+            const right = canvas.width / 2 + textWidth / 2;
+            const top = yPos - textHeight / 2;
+            const bottom = yPos + textHeight / 2;
+            menuOptionBounds.push({ left, right, top, bottom, index: optionData.index });
+        }
+    });
+    scoreDiv.style.display = 'none'; // Esconde o score no menu
+}
+
+function startGame() {
+    console.log("Jogo iniciado!");
+    scoreDiv.style.display = 'block'; // Mostra o score
+    resetGame(); // Inicia o jogo e o loop de animação
+}
+
+// Event Listeners para Mouse
+canvas.addEventListener('mousemove', (event) => {
+    if (gameState === GAME_STATE.MAIN_MENU) {
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = event.clientX - rect.left; // Coordenada X relativa ao canvas
+        const mouseY = event.clientY - rect.top;   // Coordenada Y relativa ao canvas
+
+        let newHoveredMenuItem = null;
+        for (const bounds of menuOptionBounds) {
+            // Verifica se o mouse está dentro das bounds do item de menu
+            if (mouseX >= bounds.left && mouseX <= bounds.right &&
+                mouseY >= bounds.top && mouseY <= bounds.bottom) {
+                newHoveredMenuItem = bounds.index;
+                break;
+            }
+        }
+
+        if (newHoveredMenuItem !== hoveredMenuItem) {
+            hoveredMenuItem = newHoveredMenuItem;
+        
+        }
+    }
+});
+
+canvas.addEventListener('click', (event) => {
+    if (gameState === GAME_STATE.MAIN_MENU) {
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = event.clientX - rect.left;
+        const mouseY = event.clientY - rect.top;
+
+        for (const bounds of menuOptionBounds) {
+            if (mouseX >= bounds.left && mouseX <= bounds.right &&
+                mouseY >= bounds.top && mouseY <= bounds.bottom) {
+                // Clique em uma opção de menu
+                if (bounds.index === 0) { // START
+                    startGame();
+                } else if (bounds.index === 1) { // CONFIGURAÇÕES
+                    console.log("Configurações clicadas!");
+                    // Implementar funcionalidade de configurações aqui
+                }
+                break; // Sai do loop após encontrar a opção clicada
+            }
+        }
+    }
+});
+
+function gameOver() {
+        // Ativa o programa shader de textura do WebGL
+    gl.useProgram(textureShaderProgram);
+
+        // Desabilita todos os atributos do shader de pixels, para garantir
+        // que não há atributos de outro programa habilitados acidentalmente.
+    function safeDisableAttrib(location) {
+        if (location >= 0) gl.disableVertexAttribArray(location);
+    }
+    safeDisableAttrib(coordLocation);
+    safeDisableAttrib(colorAttribLocation);
+
+        // Limpa a tela com uma cor apropriada para o Game Over
+    gl.clearColor(0.0, 0.0, 0.0, 0.8); 
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+        // Desenha o texto de DERROTA
+    const derrotaTex = textTextures['derrota'];
+    if (derrotaTex) {
+        drawQuad(canvas.width / 2, canvas.height / 2 - 100, derrotaTex.width, derrotaTex.height, null, derrotaTex);
+    }
+
+        // Atualiza e desenha o score final
+    textTextures['finalScore'] = createTextTexture('SCORE FINAL: ' + score, '30px "Press Start 2P"', '#FFF');
+    const finalScoreTexDerrota = textTextures['finalScore'];
+    if (finalScoreTexDerrota) {
+        drawQuad(canvas.width / 2, canvas.height / 2, finalScoreTexDerrota.width, finalScoreTexDerrota.height, null, finalScoreTexDerrota);
+    }
+
+    scoreDiv.style.display = 'none'; // Esconde o score normal
+
+        // Exibe os botões de controle
+    positionGameControls();    
+    gameControlsDiv.style.display = 'flex'; 
+    continueButton.style.display = 'none'; // Esconde o botão de continuar
+    restartButton.style.display = 'inline-block';
+    backToMenuButton.style.display = 'inline-block';
+
+    restartButton.disabled = false; // Habilita o botão de restart
+    backToMenuButton.disabled = false; // Habilita o botão de voltar ao menu
+    continueButton.disabled = true; // Desabilita o botão de continuar (não faz sentido aqui)
+}
+
+let victoryMusicPlayed = false;
+
+function gameWon() {
+        // Ativa o programa shader de textura do WebGL para desenhar UI
+        gl.useProgram(textureShaderProgram);
+        //checkGLError("animate - useProgram textureShaderProgram (Game Won)");
+
+        // Desabilita todos os atributos do shader de pixels, para garantir
+        // que não há atributos de outro programa habilitados acidentalmente.
+        function safeDisableAttrib(location) {
+            if (location >= 0) gl.disableVertexAttribArray(location);
+        }
+        if (colorAttribLocation !== -1) {
+            gl.disableVertexAttribArray(colorAttribLocation);
+        }
+        //checkGLError("animate - disable pixel shader attrs (Game Won)");
+
+        // Limpa a tela com uma cor apropriada para a Vitória
+        gl.clearColor(0.0, 0.5, 0.0, 0.8); // Fundo verde escuro semi-transparente
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        //checkGLError("animate - clear GAME_WON");
+
+        // Desenha o texto de VITÓRIA
+        const vitoriaTex = textTextures['vitoria'];
+        if (vitoriaTex) {
+            drawQuad(canvas.width / 2, canvas.height / 2 - 100, vitoriaTex.width, vitoriaTex.height, null, vitoriaTex);
+        }
+
+        // Atualiza e desenha o score final
+        textTextures['finalScore'] = createTextTexture('SCORE FINAL: ' + score, '30px "Press Start 2P"', '#FFF');
+        const finalScoreTexVitoria = textTextures['finalScore'];
+        if (finalScoreTexVitoria) {
+            drawQuad(canvas.width / 2, canvas.height / 2, finalScoreTexVitoria.width, finalScoreTexVitoria.height, null, finalScoreTexVitoria);
+        }
+
+        scoreDiv.style.display = 'none'; // Esconde o score normal
+
+        positionGameControls();
+        gameControlsDiv.style.display = 'flex'; // Garante que os botões estão visíveis
+        continueButton.style.display = 'none'; // Esconde o botão de continuar
+        restartButton.style.display = 'inline-block';
+        backToMenuButton.style.display = 'inline-block';
+        restartButton.disabled = false; // Habilita o botão de restart
+        backToMenuButton.disabled = false; // Habilita o botão de voltar ao menu
+        continueButton.disabled = true; // Desabilita o botão de continuar (não faz sentido aqui)
+            // Se a música parou E ainda estamos no estado GAME_WON, então podemos cancelar o frame
+            // Isso evita que ele continue chamando requestAnimationFrame indefinidamente
+        if (victoryMusicPlayed && gameAnimationFrameId) {
+            cancelAnimationFrame(gameAnimationFrameId);
+            gameAnimationFrameId = null;
+        }
+}
+
+
+let pausedState = {
+    marioX: 0,
+    goombas: [],
+    koopas: []   
+    };
+
+let hideEnemies = false;
+
+function pauseGame() {
+    gameState = GAME_STATE.PAUSED;
+    positionGameControls();
+    gameControlsDiv.style.display = 'flex';
+    continueButton.style.display = 'inline-block';
+    restartButton.style.display = 'inline-block';
+    backToMenuButton.style.display = 'inline-block';
+    restartButton.disabled = false;
+    backToMenuButton.disabled = false;
+    continueButton.disabled = false;
+    scoreDiv.style.display = 'block';
+}
+function continueGame() {
+    gameControlsDiv.style.display = 'none';
+    restartButton.style.display = 'none';
+    backToMenuButton.style.display = 'none';
+    continueButton.style.display = 'none';
+
+    restartButton.disabled = true;
+    backToMenuButton.disabled = true;
+    continueButton.disabled = true;
+
+    gameState = GAME_STATE.PLAYING;
+    if (!gameAnimationFrameId) {
+        gameAnimationFrameId = requestAnimationFrame(animate);
+    }
+}
+
+let gameFinishing = false;
+
+// Função Principal
+function animate(currentTime) {
+  // Chamada recursiva para manter a animação
+  gameAnimationFrameId = requestAnimationFrame(animate);
+
+  switch (gameState) {
+    case GAME_STATE.WELCOME_SCREEN:
+        if (theme_song.paused) {
+            theme_song.play().catch(e => console.warn("Autoplay blocked:", e));
+        }
+        drawWelcomeScreen();
+        break;
+    case GAME_STATE.MAIN_MENU:
+        if (theme_song.paused) {
+            theme_song.play().catch(e => console.warn("Autoplay blocked:", e));
+        }
+        drawMainMenu();
+        break;
+    case GAME_STATE.PLAYING:
+        if (!theme_song.paused) {
+            theme_song.pause();
+            theme_song.currentTime = 0;
+        }
+        // Ativa o programa shader do WebGL para os objetos do jogo
+        gl.useProgram(shaderProgram);
+
+        scoreDiv.style.display = 'block';
+
+        const deltaTime = currentTime - lastFrameTime;
+        lastFrameTime = currentTime;
+        const fixedSpeedFactor = deltaTime / (1000 / 60); // Fator para normalizar velocidade com base em 60 FPS
+
+        // Limpa o canvas com a cor de fundo do jogo (céu)
+        gl.clearColor(0.8, 0.9, 1.0, 1); // Céu mais claro do jogo
+        gl.clear(gl.COLOR_BUFFER_BIT);
+
+        const marioDimensions = getEffectiveDimensions(marioData, objectBaseSizes.mario.width, objectBaseSizes.mario.height);
+        const marioEffectiveWidth = marioDimensions.width;
+        const marioEffectiveHeight = marioDimensions.height;
+
+        marioPrevY = marioY;
+        marioPrevX = marioX;
+
+        marioY += marioVelocityY * fixedSpeedFactor;
+        marioVelocityY += gravity * fixedSpeedFactor;
+
+        let currentMarioMoveSpeed = 0;
+        if (keysPressed.ArrowLeft) {
+            currentMarioMoveSpeed = -MARIO_WALK_SPEED * fixedSpeedFactor;
+        }
+        if (keysPressed.ArrowRight) {
+            currentMarioMoveSpeed = MARIO_WALK_SPEED * fixedSpeedFactor;
+        }
+
+        const cameraFollowThresholdX = 0.0;
+        const marioScreenLeftLimit = - 1; // Ajuste se Mario pode ir mais para a esquerda
+
+        // Lógica de movimento do Mario e da câmera
+        if (keysPressed.ArrowRight) {
+            if (marioX < cameraFollowThresholdX) {
+                marioX += currentMarioMoveSpeed;
+            } else {
+                cameraX -= currentMarioMoveSpeed;
+            }
+        } else if (keysPressed.ArrowLeft) {
+            if (cameraX < 0 && marioX <= marioScreenLeftLimit) {
+                cameraX -= currentMarioMoveSpeed;
+            } else {
+                marioX += currentMarioMoveSpeed;
+            }
+        }
+
+        // Limites da câmera e do Mario
+        if (cameraX > 0) cameraX = 0;
+        if (marioX < marioScreenLeftLimit) marioX = marioScreenLeftLimit;
+        if (marioX > cameraFollowThresholdX) marioX = cameraFollowThresholdX;
+
+
+        const cenarioInferiorY = cenarioInferiorDisplayY;
+
+        let cenarioInferiorOffsetX = (cameraX * PARALLAX_FACTOR_GROUND) % cenarioInferiorDimensions.width;
+        if (cenarioInferiorOffsetX > 0) {
+            cenarioInferiorOffsetX -= cenarioInferiorDimensions.width;
+        }
+
+        // Desenha e verifica colisão com o chão
+        for (let i = 0; i < 3; i++) {
+            let currentCenarioInferiorActualX = (cenarioInferiorOffsetX + cenarioInferiorDimensions.width * i);
+
+            const collisionWithGround = checkCollision(
+                marioX, marioY, marioEffectiveWidth, marioEffectiveHeight,
+                currentCenarioInferiorActualX, cenarioInferiorY, cenarioInferiorDimensions.width, cenarioInferiorDimensions.height,
+                marioPrevY, marioPrevX
+            );
+
+            if (collisionWithGround.collided && collisionWithGround.direction === 'top') {
+                marioY = cenarioInferiorY + cenarioInferiorDimensions.height / 2 + marioEffectiveHeight / 2;
+                marioVelocityY = 0;
+                jumping = false;
+                break;
+            }
+        }
+
+            // Evita que o Mario caia indefinidamente (sem Game Over)
+            if (marioY - marioEffectiveHeight / 2 < cenarioInferiorY - cenarioInferiorDimensions.height / 2 - 0.1) {
+            marioY = cenarioInferiorY + cenarioInferiorDimensions.height / 2 + marioEffectiveHeight / 2;
+            marioVelocityY = 0;
+            jumping = false;
+        }
+
+        // Spawna inimigos/itens
+        if (!stopEnemySpawn && (currentTime - lastEnemySpawnTime > (enemySpawnIntervalMin + Math.random() * (enemySpawnIntervalMax - enemySpawnIntervalMin)))) {
+            spawnEntity();
+            lastEnemySpawnTime = currentTime;
+        }
+
+        const escadaDimensions = getEffectiveDimensions(escadaData, objectBaseSizes.escada.width, objectBaseSizes.escada.height);
+        const escadaScreenX = ESCADA_WORLD_X + cameraX * PARALLAX_FACTOR_GROUND;
+
+        if (escadaScreenX < 1.0) {
+            stopEnemySpawn = true;
+        }
+
+        // Desenha nuvens
+        const nuvemDimensions = getEffectiveDimensions(nuvemData, objectBaseSizes.nuvem.width, objectBaseSizes.nuvem.height);
+        const cloudWrapAroundLimit = 2.0 + nuvemDimensions.width; // Ajuste para o wrap-around
+
+        nuvens.forEach(n => {
+            let nuvemScreenX = n.x + cameraX * PARALLAX_FACTOR_CLOUD;
+
+            if (nuvemScreenX < -1.0 - nuvemDimensions.width / 2) { // Se a nuvem saiu da tela à esquerda
+                nuvemScreenX += cloudWrapAroundLimit; // Volta para a direita
+                n.x += cloudWrapAroundLimit; // Atualiza a posição "real" da nuvem
+            }
+            drawPixelObject(nuvemData, nuvemScreenX, n.y);
+        });
+
+        // Desenha cenário superior e verifica colisão
+        const cenarioSuperiorActualDimensions = getEffectiveDimensions(cenarioSuperiorData, objectBaseSizes.cenarioSuperior.width, objectBaseSizes.cenarioSuperior.height);
+        const cenarioSuperiorScreenX = 0.0 + cameraX * PARALLAX_FACTOR_SCENERY_SUPERIOR;
+        drawPixelObject(cenarioSuperiorData, cenarioSuperiorScreenX, cenarioSuperiorDisplayY);
+
+        const collisionWithCenarioSuperior = checkCollision(
+            marioX, marioY, marioEffectiveWidth, marioEffectiveHeight,
+            cenarioSuperiorScreenX, cenarioSuperiorDisplayY, cenarioSuperiorActualDimensions.width, cenarioSuperiorActualDimensions.height,
+            marioPrevY, marioPrevX
+        );
+
+        if (collisionWithCenarioSuperior.collided) {
+            if (collisionWithCenarioSuperior.direction === 'top' && marioVelocityY < 0) {
+                marioY = cenarioSuperiorDisplayY + cenarioSuperiorActualDimensions.height / 2 + marioEffectiveHeight / 2;
+                marioVelocityY = 0;
+                jumping = false;
+            } else if (collisionWithCenarioSuperior.direction === 'bottom' && marioVelocityY > 0) {
+                marioVelocityY = 0;
+            } else if (collisionWithCenarioSuperior.direction === 'left') {
+                marioX = cenarioSuperiorScreenX - cenarioSuperiorActualDimensions.width / 2 - marioEffectiveWidth / 2;
+                marioVelocityX = 0;
+            } else if (collisionWithCenarioSuperior.direction === 'right') {
+                marioX = cenarioSuperiorScreenX + cenarioSuperiorActualDimensions.width / 2 + marioEffectiveHeight / 2;
+                marioVelocityX = 0;
+            }
+        }
+
+        // Desenha cenário inferior (loop para preencher a tela)
+        drawPixelObject(cenarioInferiorData, cenarioInferiorOffsetX, cenarioInferiorDisplayY);
+        drawPixelObject(cenarioInferiorData, cenarioInferiorOffsetX + cenarioInferiorDimensions.width, cenarioInferiorDisplayY);
+        drawPixelObject(cenarioInferiorData, cenarioInferiorOffsetX + cenarioInferiorDimensions.width * 2, cenarioInferiorDisplayY);
+
+
+        // Goombas
+        goombas = goombas.filter(g => {
+            g.x -= g.speed * fixedSpeedFactor;
+            const goombaScreenX = g.x + cameraX * PARALLAX_FACTOR_GROUND;
+            if(!hideEnemies) {
+                drawPixelObject(goombaData, goombaScreenX, g.y);
+            }
+            const collision = checkCollision(marioX, marioY, marioEffectiveWidth, marioEffectiveHeight,
+                                            goombaScreenX, g.y, g.width, g.height, marioPrevY, marioPrevX);
+
+            if (collision.collided) {
+                if (collision.direction === 'top' && marioVelocityY < 0) { // Mario pulou em cima
+                    score += 10;
+                    scoreDiv.textContent = `Score: ${score}`;
+                    marioVelocityY = 0.05; // Pequeno pulo de rebote
+                    return false; // Remove goomba
+                }
+                else { // Colisão lateral
+                    console.log("Colisão com Goomba! Game Over.");
+                    mario_death.play().catch(e => console.warn("Autoplay blocked:", e));
+                   // alert("Game Over! Colisão com Goomba.");
+                    setTimeout(() => {
+                        restartButton.style.display = 'block';
+                        }, 3000)
+                    if (gameAnimationFrameId) {
+                        cancelAnimationFrame(gameAnimationFrameId);
+                        gameAnimationFrameId = null;
+                    }
+                    gameState = GAME_STATE.GAME_OVER;
+                    gameOver();
+                   // return false; // Remove goomba e encerra o loop de animação
+                }
+            }
+            return (goombaScreenX) > -1.2; // Remove goombas fora da tela
+        });
+
+        // Koopas
+        koopas = koopas.filter(k => {
+            k.x -= k.speed * fixedSpeedFactor;
+            const koopaScreenX = k.x + cameraX * PARALLAX_FACTOR_GROUND;
+            if(!hideEnemies) {
+                drawPixelObject(koopaData, koopaScreenX, k.y);
+            }
+            const collision = checkCollision(marioX, marioY, marioEffectiveWidth, marioEffectiveHeight,
+                                            koopaScreenX, k.y, k.width, k.height, marioPrevY, marioPrevX);
+
+            if (collision.collided) {
+                if (collision.direction === 'top' && marioVelocityY < 0) { // Mario pulou em cima
+                    score += 20;
+                    scoreDiv.textContent = `Score: ${score}`;
+                    marioVelocityY = 0.05; // Pequeno pulo de rebote
+                    return false; // Remove koopa
+                } else { // Colisão lateral
+                    console.log("Colisão com Koopa! Game Over.");
+                    mario_death.play().catch(e => console.warn("Autoplay blocked:", e));
+                    setTimeout(() => {
+                        restartButton.style.display = 'block';
+                        }, 3000)
+                    if (gameAnimationFrameId) {
+                        cancelAnimationFrame(gameAnimationFrameId);
+                        gameAnimationFrameId = null;
+                    }
+                    gameState = GAME_STATE.GAME_OVER;
+                    gameOver();
+                   // return false; // Remove koopa e encerra o loop de animação
+                }
+            }
+            return (koopaScreenX) > -1.2; // Remove koopas fora da tela
+        });
+
+        // Moedas
+        moedas = moedas.filter(m => {
+            if (!m.collected) {
+                m.x -= m.speed * fixedSpeedFactor;
+                const moedaScreenX = m.x + cameraX * PARALLAX_FACTOR_GROUND;
+                drawPixelObject(moedaData, moedaScreenX, m.y);
+                if (checkCollision(marioX, marioY, marioEffectiveWidth, marioEffectiveHeight,
+                                    moedaScreenX, m.y, m.width, m.height, marioPrevY, marioPrevX).collided) {
+                    coin.play()
+                    console.log("Moeda coletada!");
+                    score+= 200;
+                    scoreDiv.textContent = `Score: ${score}`;
+                    m.collected = true; // Marca como coletada, será filtrada no próximo frame
+                }
+            }
+            return (m.x + cameraX * PARALLAX_FACTOR_GROUND) > -1.2 && !m.collected;
+        });
+
+        // Blocos
+        blocos = blocos.filter(b => {
+            const blockScreenX = b.x + cameraX * PARALLAX_FACTOR_SCENERY_SUPERIOR;
+            drawPixelObject(blocoData, blockScreenX, b.y);
+
+            const collision = checkCollision(marioX, marioY, marioEffectiveWidth, marioEffectiveHeight,
+                                            blockScreenX, b.y, b.width, b.height, marioPrevY, marioPrevX);
+
+            if (collision.collided) {
+                if (collision.direction === 'top' && marioVelocityY < 0) {
+                    marioY = b.y + b.height / 2 + marioEffectiveHeight / 2;
+                    marioVelocityY = 0;
+                    jumping = false;
+                } else if (collision.direction === 'bottom' && marioVelocityY > 0) {
+                    marioVelocityY = 0; // Para mario ao bater por baixo
+                }
+                else if (collision.direction === 'left') {
+                    marioX = blockScreenX - b.width / 2 - marioEffectiveWidth / 2;
+                } else if (collision.direction === 'right') {
+                    marioX = blockScreenX + b.width / 2 + marioEffectiveHeight / 2;
+                }
+            }
+            return blockScreenX > -1.2; 
+        });
+
+        // Canos
+        canos = canos.filter(c => {
+            const canoScreenX = c.x + cameraX * PARALLAX_FACTOR_GROUND;
+            drawPixelObject(canoData, canoScreenX, c.y);
+
+            const collision = checkCollision(marioX, marioY, marioEffectiveWidth, marioEffectiveHeight,
+                                            canoScreenX, c.y, c.width, c.height, marioPrevY, marioPrevX);
+
+            if (collision.collided) {
+                if (collision.direction === 'top' && marioVelocityY < 0) {
+                    marioY = c.y + c.height / 2 + marioEffectiveHeight / 2;
+                    marioVelocityY = 0;
+                    jumping = false;
+                } else if (collision.direction === 'bottom' && marioVelocityY > 0) {
+                    marioVelocityY = 0; // Para mario ao bater por baixo
+                }
+                else if (collision.direction === 'left') {
+                    marioX = canoScreenX - c.width / 2 - marioEffectiveWidth / 2;
+                } else if (collision.direction === 'right') {
+                    marioX = canoScreenX + c.width / 2 + marioEffectiveHeight / 2;
+                }
+            }
+            return canoScreenX > -1.2; // Mantém o cano na tela
+        });
+
+        // Escada de chegada
+        const escadaY = cenarioInferiorDisplayY + cenarioInferiorDimensions.height / 2 + escadaDimensions.height / 2;
+        drawPixelObject(escadaData, escadaScreenX, escadaY);
+
+        const collisionWithEscada = checkCollision(
+            marioX, marioY, marioEffectiveWidth, marioEffectiveHeight,
+            escadaScreenX, escadaY, escadaDimensions.width + 0.03, escadaDimensions.height,
+            marioPrevY, marioPrevX
+        );
+
+        if (collisionWithEscada.collided) {
+            if (collisionWithEscada.direction === 'top' && marioVelocityY < 0) {
+                marioY = escadaY + escadaDimensions.height / 2 + marioEffectiveHeight / 2;
+                marioVelocityY = 0;
+                jumping = false;
+            } else if (collisionWithEscada.direction === 'bottom' && marioVelocityY > 0) {
+                marioVelocityY = 0;
+            }
+            else if (collisionWithEscada.direction === 'left') {
+                marioX = escadaScreenX - escadaDimensions.width / 2 - marioEffectiveWidth / 2;
+            } else if (collisionWithEscada.direction === 'right') {
+                marioX = escadaScreenX + escadaDimensions.width / 2 + marioEffectiveHeight / 2;
+            }
+        }
+
+      // Castelo e bandeira de chegada
+        const chegadaDimensions = getEffectiveDimensions(chegadaData, objectBaseSizes.chegada.width, objectBaseSizes.chegada.height);
+        const casteloDimensions = getEffectiveDimensions(casteloData, objectBaseSizes.castelo.width, objectBaseSizes.castelo.height);
+
+        const chegadaWorldX = CASTLE_WORLD_X - 0.6;
+        const chegadaY = cenarioInferiorDisplayY + cenarioInferiorDimensions.height / 2 + chegadaDimensions.height / 2;
+
+        const casteloWorldX = CASTLE_WORLD_X;
+        const casteloY = cenarioInferiorDisplayY + cenarioInferiorDimensions.height / 2 + casteloDimensions.height / 2;
+
+        drawPixelObject(chegadaData, chegadaWorldX + cameraX * PARALLAX_FACTOR_GROUND, chegadaY);
+        drawPixelObject(casteloData, casteloWorldX + cameraX * PARALLAX_FACTOR_GROUND, casteloY);
+
+        const halffCasteloWidth = casteloDimensions.width / 2.7;
+        
+        const collisionWithCastelo = checkCollision(
+            marioX, marioY, marioEffectiveWidth, marioEffectiveHeight,
+            casteloWorldX + cameraX * PARALLAX_FACTOR_GROUND, casteloY, halffCasteloWidth, casteloDimensions.height,
+            marioPrevY, marioPrevX
+        );
+
+        if (collisionWithCastelo.collided && !gameFinishing) {
+            gameFinishing = true;
+
+            level_finish.currentTime = 0;
+            level_finish.play()
+            victoryMusicPlayed = false;
+
+            marioVelocityX = 0;
+            marioVelocityY = 0;
+            keysPressed.ArrowLeft = false;
+            keysPressed.ArrowRight = false;
+
+            setTimeout(() => {
+            gameState = GAME_STATE.GAME_WON;
+            }, 5000);
+
+            //return; 
+        }
+
+        drawPixelObject(marioData, marioX, marioY);
+
+        break; 
+
+    case GAME_STATE.PAUSED:
+
+        const pausedTex = textTextures['paused'];
+        if (pausedTex) {
+            drawQuad(canvas.width / 2, canvas.height / 2 - 100, pausedTex.width, pausedTex.height, null, pausedTex);
+        }
+
+        gameControlsDiv.style.display = 'flex';
+        continueButton.style.display = 'inline-block'; 
+        restartButton.style.display = 'inline-block'; 
+        backToMenuButton.style.display = 'inline-block';
+        
+        restartButton.disabled = false;
+        backToMenuButton.disabled = false;
+        continueButton.disabled = false; 
+
+        scoreDiv.style.display = 'block'; 
+
+        break;
+
+    case GAME_STATE.GAME_OVER:
+        gameOver();
+        break;
+    case GAME_STATE.GAME_WON:
+        gameWon();
+       // if (!theme_song.paused) {
+       // theme_song.pause();
+       // theme_song.currentTime = 0;
+        
+        
+        break;
+  }  
+}
+
+initShaders(); 
+initTextShaders(); 
+preloadTextTextures();
+
+Promise.all([
+  loadPixelsJSON('jason_s/pixels_mario.json', marioData),
+  loadPixelsJSON('jason_s/pixels_cenario_superior.json', cenarioSuperiorData),
+  loadPixelsJSON('jason_s/pixels_cenario_inferior.json', cenarioInferiorData),
+  loadPixelsJSON('jason_s/pixels_goombario.json', goombaData),
+  loadPixelsJSON('jason_s/pixels_koopa.json', koopaData),
+  loadPixelsJSON('jason_s/pixels_moeda.json', moedaData),
+  loadPixelsJSON('jason_s/pixels_cloud.json', nuvemData),
+  loadPixelsJSON('jason_s/pixels_bloco.json', blocoData),
+  loadPixelsJSON('jason_s/pixels_chegada.json', chegadaData),
+  loadPixelsJSON('jason_s/pixels_castelo.json', casteloData),
+  loadPixelsJSON('jason_s/pixels_cano.json', canoData),
+  loadPixelsJSON('jason_s/pixels_escada.json', escadaData)
+]).then(results => {
+  if (results.every(success => success)) {
+    processObjectVertices(marioData, objectBaseSizes.mario.width, objectBaseSizes.mario.height);
+    processObjectVertices(cenarioSuperiorData, objectBaseSizes.cenarioSuperior.width, objectBaseSizes.cenarioSuperior.height);
+    processObjectVertices(cenarioInferiorData, objectBaseSizes.cenarioInferior.width, objectBaseSizes.cenarioInferior.height);
+    processObjectVertices(goombaData, objectBaseSizes.goomba.width, objectBaseSizes.goomba.height);
+    processObjectVertices(koopaData, objectBaseSizes.koopa.width, objectBaseSizes.koopa.height);
+    processObjectVertices(moedaData, objectBaseSizes.moeda.width, objectBaseSizes.moeda.height);
+    processObjectVertices(nuvemData, objectBaseSizes.nuvem.width, objectBaseSizes.nuvem.height);
+    processObjectVertices(blocoData, objectBaseSizes.bloco.width, objectBaseSizes.bloco.height);
+    processObjectVertices(chegadaData, objectBaseSizes.chegada.width, objectBaseSizes.chegada.height);
+    processObjectVertices(casteloData, objectBaseSizes.castelo.width, objectBaseSizes.castelo.height);
+    processObjectVertices(canoData, objectBaseSizes.cano.width, objectBaseSizes.cano.height);
+    processObjectVertices(escadaData, objectBaseSizes.escada.width, objectBaseSizes.escada.height);
+
+    setupObjectBuffers(marioData);
+    setupObjectBuffers(cenarioSuperiorData);
+    setupObjectBuffers(cenarioInferiorData);
+    setupObjectBuffers(goombaData);
+    setupObjectBuffers(koopaData);
+    setupObjectBuffers(moedaData);
+    setupObjectBuffers(nuvemData);
+    setupObjectBuffers(blocoData);
+    setupObjectBuffers(chegadaData);
+    setupObjectBuffers(casteloData);
+    setupObjectBuffers(canoData);
+    setupObjectBuffers(escadaData);
+
+    const marioDimensions = getEffectiveDimensions(marioData, objectBaseSizes.mario.width, objectBaseSizes.mario.height);
+    cenarioInferiorDimensions = getEffectiveDimensions(cenarioInferiorData, objectBaseSizes.cenarioInferior.width, objectBaseSizes.cenarioInferior.height);
+    marioY = (cenarioInferiorDisplayY + cenarioInferiorDimensions.height / 2) + (marioDimensions.height / 2) + 0.001;
+
+    const cloudDimensions = getEffectiveDimensions(nuvemData, objectBaseSizes.nuvem.width, objectBaseSizes.nuvem.height);
+    nuvens.forEach(n => {
+        n.width = cloudDimensions.width;
+        n.height = cloudDimensions.height;
+    });
+
+    console.log("Todos os dados JSON carregados, vértices processados e buffers configurados. Iniciando animação.");
+    gameAnimationFrameId = requestAnimationFrame(animate);
+  } else {
+    console.error("Falha ao carregar um ou mais arquivos JSON. A animação não será iniciada.");
+    alert("Não foi possível carregar todos os recursos do jogo. Verifique os caminhos dos arquivos JSON e o console para erros.");
+  }
+}).catch(error => {
+  console.error("Erro fatal ao carregar recursos:", error);
+  alert("Ocorreu um erro crítico ao carregar os recursos do jogo. Consulte o console.");
+});
+
+</script>
+</body>
+</html>
