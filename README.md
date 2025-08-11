@@ -34,6 +34,7 @@ Projeto desenvolvido por alunos do **3º semestre de Ciência da Computação**:
 
 - [Karine Araujo dos Santos](https://github.com/KarineAraujoSantos)
 - [Letícia Borsaro](https://github.com/leticiaborsaro)
+- [João Victor Rios Brito](https://github.com/Jvriosbrito)
 
 ---
 
